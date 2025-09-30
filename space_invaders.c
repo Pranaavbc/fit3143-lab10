@@ -98,6 +98,26 @@ int main(int argc, char *argv[]) {
         printf("Master: initial alive count = %d\n", nrows * ncols);
     }
 
+    int player_col = 0; // start at leftmost 
+    int player_alive = 1;  //alive flag 
+    
+    // track players cannon 
+    if (rank == 0) {
+        //clamp at lowerbound 
+        if (player_col < 0) player_col = 0;
+        // clamp at upperbound. 
+        if (player_col >= ncols) player_col = ncols - 1;
+        printf("Master: player starts at col=%d\n", player_col);
+
+    }
+
+
+
+
+
+
+
+
     if (rank == 0) {
         free(alive);
     }
