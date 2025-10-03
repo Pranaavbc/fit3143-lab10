@@ -3,6 +3,14 @@
 #include <mpi.h>
 
 
+typedef struct {
+    int tick; 
+    int player_col; 
+    int game_over;
+} TickMsg; 
+
+
+
 // Step 8: ASCII renderer (master)
 void print_board(int tick, int nrows, int ncols, const int *alive,
                  int player_col, const Shot *shots, int max_shots) {
@@ -227,9 +235,31 @@ int main(int argc, char *argv[]) {
 
     //// 
 
+    // print the board - if rank 0 
     if (rank == 0) {
     print_board(/*tick=*/0, nrows, ncols, alive, player_col, shots, MAX_SHOTS);
     }
+
+
+    TickMsg tmsg; 
+
+    //
+    if (rank == 0) {
+        tmsg.tick = 0;
+        tmsg.player_col = player_col;
+        tmsg.game_over = 0;
+    }
+
+    MPI_Bcast(&tmsg, 3 , MPI_INT, 0 , MPI_COMM_WORLD);
+
+    /* 
+    // invaders can read it (optional debug)
+    if (rank > 0) {
+        // printf("Rank %d got tick=%d player_col=%d\n", rank, tmsg.tick, tmsg.player_col);
+    }
+    */
+
+
     
 
     if (rank == 0) {
