@@ -9,6 +9,20 @@ typedef struct {
     int game_over;
 } TickMsg; 
 
+int decide_fire(int tick, int eligible, int rank_seed){
+    if (!eligible) return 0 
+    if (tick % 4 != 0) return 0 
+
+    // simple deterministic-ish RNG per (tick, rank)
+    unsigned int s = (unsigned int)(tick * 1103515245u + rank_seed * 12345u);
+    // map to [0,1)
+    double u = (double)(s % 1000) / 1000.0;
+
+    return u < 0.1 ? 1: 0; 
+
+
+}
+
 
 
 // Step 8: ASCII renderer (master)
@@ -258,6 +272,15 @@ int main(int argc, char *argv[]) {
         // printf("Rank %d got tick=%d player_col=%d\n", rank, tmsg.tick, tmsg.player_col);
     }
     */
+
+    // Invader path: make a local fire/not-fire decision (eligibility stubbed as 1 for now)
+    if (rank > 0) {
+        int eligible = 1; // TODO (Step 11): master will tell us if we’re bottom-most
+        int fired = decide_fire(tmsg.tick, eligible, rank);
+        // Debug:
+        // if (fired) printf("Rank %d fired at tick %d\n", rank, tmsg.tick);
+    }
+
 
 
     
