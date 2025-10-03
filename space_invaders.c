@@ -112,11 +112,82 @@ int main(int argc, char *argv[]) {
     }
 
 
+    //// Track Bullets ----------------------------------------
+    #define MAX_SHOTS 1024 
+
+    typedef struct {
+        int col; 
+        int from_row; 
+        int delta; 
+
+        unsigned char from_Player; 
+        unsigned char active; 
+    } Shot; 
+
+    Shot shots[MAX_SHOTS];
+    int nshots = 0;   // optional: number of active shots
+
+    if (rank == 0) {
+
+        for (int i = 0; i < MAX_SHOTS; ++i){
+            shots[i].active = free;   // set to "free"
+            shots[i].delta  = 0;
+            shots[i].col    = 0;
+            shots[i].from_row = 0;
+            shots[i].from_player = 0;
+        }
+
+        printf("Master: bullet pool ready (MAX_SHOTS=%d)\n", MAX_SHOTS);
+    }
+
+    // Tiny helpers (declarations for now; you can implement later)
+    int add_player_shot(Shot *pool, int max, int col) {
+        // find a free slot, set: active=1, from_player=1, col=col, from_row = -1, delta=0
+        // return index or -1 if full
+        // TODO: fill this in
+
+        for(int i = 0; i < max; ++i){
+
+            if(pool[i].active == 0){
+                pool[i].active = 1;
+                pool[i].from_player = 1;
+                pool[i].col = col;
+                pool[i].from_row = -1;
+                pool[i].delta = 0;  
+                
+                return i;
+                
+            }
+        }
+
+        return -1;
+    }
+
+    int add_invader_shot(Shot *pool, int max, int col, int shooter_row) {
+        // find a free slot, set: active=1, from_player=0, col=col, from_row=shooter_row, delta=0
+        // return index or -1 if full
+        // TODO: fill this in
+
+          for(int i = 0; i < max; ++i){
+
+            if(pool[i].active == 0){
+                pool[i].active = 1;
+                pool[i].from_player = 0;
+                pool[i].col = col;
+                pool[i].from_row = shooter_row;
+                pool[i].delta = 0;  
+                
+                return i;
+                
+            }
+        }
 
 
+        return -1;
+    }
 
 
-
+    //// 
 
     if (rank == 0) {
         free(alive);
