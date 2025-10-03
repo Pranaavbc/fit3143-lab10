@@ -2,6 +2,44 @@
 #include <stdlib.h>
 #include <mpi.h>
 
+
+// Step 8: ASCII renderer (master)
+void print_board(int tick, int nrows, int ncols, const int *alive,
+                 int player_col, const Shot *shots, int max_shots) {
+    if (tick >= 0) printf("t=%d\n", tick);
+
+    // print from top row down to bottom row
+    for (int r = nrows - 1; r >= 0; --r) {
+        for (int c = 0; c < ncols; ++c) {
+            char cell = alive[IDX(r,c)] ? 'V' : '.' ;  // choose symbols
+            // overlay bullets that are inside the grid:
+            for (int i = 0; i < max_shots; ++i) {
+                if (!shots[i].active) continue;
+                // compute current row of the shot if it's inside grid:
+                int cr = -999;
+                if (shots[i].from_player) {
+                    if (shots[i].delta >= 2) cr = shots[i].delta - 2;
+                } else {
+                    if (shots[i].delta >= 2) cr = shots[i].from_row - (shots[i].delta - 1);
+                }
+                if (cr == r && shots[i].col == c) {
+                    cell = shots[i].from_player ? '|' : '!';
+                }
+            }
+            printf("[%c] ", cell);
+        }
+        printf("\n");
+    }
+
+    // player row (under the grid)
+    for (int c = 0; c < ncols; ++c) {
+        printf(c == player_col ? "[^] " : "[ ] ");
+    }
+    printf("\n\n");
+}
+
+
+
 int main(int argc, char *argv[]) {
 
     //rank, size, and dimensions (column) 
@@ -188,6 +226,11 @@ int main(int argc, char *argv[]) {
 
 
     //// 
+
+    if (rank == 0) {
+    print_board(/*tick=*/0, nrows, ncols, alive, player_col, shots, MAX_SHOTS);
+    }
+    
 
     if (rank == 0) {
         free(alive);
