@@ -315,6 +315,25 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    if(rank == 0) {
+        int pi = add_player_shot(shots, MAX_SHOTS, player_col)
+
+        for (int r = 1; r < size; ++i ) {
+
+            if(!all[r].fired) continue; 
+
+            int col = all[r].col; 
+            int shooter_row = all[r].row; 
+            int ii = add_invader_shot(shots, MAX_SHOTS, col, shooter_row); 
+
+        }
+
+    }
+
+    free(all); 
+    
+
+
 
     if (rank == 0) {
         free(alive);
