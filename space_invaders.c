@@ -9,6 +9,15 @@ typedef struct {
     int game_over;
 } TickMsg; 
 
+typedef struct {
+    int fired; 
+    int row; 
+    int col; 
+} InvaderEvent; 
+
+
+
+
 int decide_fire(int tick, int eligible, int rank_seed){
     if (!eligible) return 0 
     if (tick % 4 != 0) return 0 
@@ -279,6 +288,31 @@ int main(int argc, char *argv[]) {
         int fired = decide_fire(tmsg.tick, eligible, rank);
         // Debug:
         // if (fired) printf("Rank %d fired at tick %d\n", rank, tmsg.tick);
+    }
+
+    InvaderEvent my_ev = {0, -1, -1};
+    if (rank > 0) {
+        int invader_rank = rank - 1;
+        my_ev.row = invader_rank / ncols;
+        my_ev.col = invader_rank % ncols;
+        my_ev.fired = fired;
+    }
+
+    InvaderEvent *all = NULL;
+    if (rank == 0) {
+        all = (InvaderEvent*) malloc(sizeof(InvaderEvent) * size);
+    }
+
+    MPI_Gather(&my_ev, 3, MPI_INT, all, 3, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Master debug output
+    if (rank == 0) {
+        for (int r = 1; r < size; ++r) {
+            if (all[r].fired) {
+                printf("Tick %d: Invader rank %d fired (row=%d, col=%d)\n",
+                    tmsg.tick, r, all[r].row, all[r].col);
+            }
+        }
     }
 
 
