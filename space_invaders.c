@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <mpi.h>
+#include <limits.h>
 
 
 typedef struct {
@@ -16,6 +17,23 @@ typedef struct {
 } InvaderEvent; 
 
 
+void advance_shots(Shot *pool, int max) {
+    for (int i = 0; i < max; ++i) {
+        if (!pool[i].active) continue;
+        pool[i].delta += 1;
+    }
+}
+
+int shot_row_now(const Shot *s) {
+    if (!s->active) return INT_MIN;
+    if (s->from_player) {
+        if (s->delta < 2) return INT_MIN;        // still in the gap
+        return s->delta - 2;                     // 0,1,2,...
+    } else {
+        if (s->delta < 2) return INT_MIN;
+        return s->from_row - (s->delta - 1);     // r-1, r-2, ...
+    }
+}
 
 
 int decide_fire(int tick, int eligible, int rank_seed){
@@ -332,6 +350,10 @@ int main(int argc, char *argv[]) {
 
     free(all); 
     
+    if (rank == 0) {
+        advance_shots(shots, MAX_SHOTS);
+        print_board(tmsg.tick, nrows, ncols, alive, player_col, shots, MAX_SHOTS);
+    }
 
 
 
