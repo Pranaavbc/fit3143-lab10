@@ -50,6 +50,29 @@ int decide_fire(int tick, int eligible, int rank_seed){
 
 }
 
+// Deactivate bullets that are outside the world now
+void cull_shots(Shot *pool, int max, int nrows) {
+    for (int i = 0; i < max; ++i) {
+        if (!pool[i].active) continue;
+        int cr = shot_row_now(&pool[i]);
+        if (pool[i].from_player) {
+            // player bullets past the TOP row are gone
+            if (cr > nrows - 1 ) pool[i].active = 0;   // top row index is nrows-1
+        } else {
+            // invader bullets past the player row (below -1) are gone
+            if (cr < -1) pool[i].active = 0;
+        }
+    }
+}
+
+// Return 1 if no invaders are alive; else 0
+int all_invaders_dead(const int *alive, int nrows, int ncols) {
+    for (int r = 0; r < nrows; ++r)
+        for (int c = 0; c < ncols; ++c)
+            if (alive[IDX(r,c)] == 1) return 0;
+    return 1 ;
+}
+
 
 
 // Step 8: ASCII renderer (master)
@@ -387,6 +410,16 @@ int main(int argc, char *argv[]) {
     
     if (rank == 0) {
         advance_shots(shots, MAX_SHOTS);
+        print_board(tmsg.tick, nrows, ncols, alive, player_col, shots, MAX_SHOTS);
+    }
+
+    if (rank == 0) {
+        advance_shots(shots, MAX_SHOTS);
+        resolve_collisions(shots, MAX_SHOTS, alive, nrows, ncols, player_col, &player_alive);
+        cull_shots(shots, MAX_SHOTS, nrows);
+
+        int win = all_invaders_dead(alive, nrows, ncols);
+        // (we’ll wire game_over handling in a later step)
         print_board(tmsg.tick, nrows, ncols, alive, player_col, shots, MAX_SHOTS);
     }
 
