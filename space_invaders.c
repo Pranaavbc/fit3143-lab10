@@ -1,93 +1,75 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <mpi.h>
 #include <limits.h>
+#include <mpi.h>
 
+// ---------- Constants & Macros ----------
+#define IDX(r,c) ((r) * ncols + (c))
+#define MAX_SHOTS 1024
 
+// ---------- Data Structures ----------
+
+// bullet
 typedef struct {
-    int tick; 
-    int player_col; 
+    int  col;
+    int  from_row;
+    int  delta;
+    unsigned char from_player;
+    unsigned char active;
+} Shot;
+
+// tick message (broadcast each tick)
+typedef struct {
+    int tick;
+    int player_col;
     int game_over;
-} TickMsg; 
+} TickMsg;
 
+// invader -> master report
 typedef struct {
-    int fired; 
-    int row; 
-    int col; 
-} InvaderEvent; 
+    int fired;
+    int row;
+    int col;
+} InvaderEvent;
 
-
-void advance_shots(Shot *pool, int max) {
+// ---------- Step 7 helpers ----------
+int add_player_shot(Shot *pool, int max, int col) {
     for (int i = 0; i < max; ++i) {
-        if (!pool[i].active) continue;
-        pool[i].delta += 1;
-    }
-}
-
-int shot_row_now(const Shot *s) {
-    if (!s->active) return INT_MIN;
-    if (s->from_player) {
-        if (s->delta < 2) return INT_MIN;        // still in the gap
-        return s->delta - 2;                     // 0,1,2,...
-    } else {
-        if (s->delta < 2) return INT_MIN;
-        return s->from_row - (s->delta - 1);     // r-1, r-2, ...
-    }
-}
-
-
-int decide_fire(int tick, int eligible, int rank_seed){
-    if (!eligible) return 0 
-    if (tick % 4 != 0) return 0 
-
-    // simple deterministic-ish RNG per (tick, rank)
-    unsigned int s = (unsigned int)(tick * 1103515245u + rank_seed * 12345u);
-    // map to [0,1)
-    double u = (double)(s % 1000) / 1000.0;
-
-    return u < 0.1 ? 1: 0; 
-
-
-}
-
-// Deactivate bullets that are outside the world now
-void cull_shots(Shot *pool, int max, int nrows) {
-    for (int i = 0; i < max; ++i) {
-        if (!pool[i].active) continue;
-        int cr = shot_row_now(&pool[i]);
-        if (pool[i].from_player) {
-            // player bullets past the TOP row are gone
-            if (cr > nrows - 1 ) pool[i].active = 0;   // top row index is nrows-1
-        } else {
-            // invader bullets past the player row (below -1) are gone
-            if (cr < -1) pool[i].active = 0;
+        if (pool[i].active == 0) {
+            pool[i].active = 1;
+            pool[i].from_player = 1;
+            pool[i].col = col;
+            pool[i].from_row = -1;
+            pool[i].delta = 0;
+            return i;
         }
     }
+    return -1;
 }
 
-// Return 1 if no invaders are alive; else 0
-int all_invaders_dead(const int *alive, int nrows, int ncols) {
-    for (int r = 0; r < nrows; ++r)
-        for (int c = 0; c < ncols; ++c)
-            if (alive[IDX(r,c)] == 1) return 0;
-    return 1 ;
+int add_invader_shot(Shot *pool, int max, int col, int shooter_row) {
+    for (int i = 0; i < max; ++i) {
+        if (pool[i].active == 0) {
+            pool[i].active = 1;
+            pool[i].from_player = 0;
+            pool[i].col = col;
+            pool[i].from_row = shooter_row;
+            pool[i].delta = 0;
+            return i;
+        }
+    }
+    return -1;
 }
 
-
-
-// Step 8: ASCII renderer (master)
+// ---------- Step 8: board printer ----------
 void print_board(int tick, int nrows, int ncols, const int *alive,
                  int player_col, const Shot *shots, int max_shots) {
-    if (tick >= 0) printf("t=%d\n", tick);
-
-    // print from top row down to bottom row
+    printf("t=%d\n", tick);
     for (int r = nrows - 1; r >= 0; --r) {
         for (int c = 0; c < ncols; ++c) {
-            char cell = alive[IDX(r,c)] ? 'V' : '.' ;  // choose symbols
-            // overlay bullets that are inside the grid:
+            char cell = alive[IDX(r,c)] ? 'V' : '.';
             for (int i = 0; i < max_shots; ++i) {
                 if (!shots[i].active) continue;
-                // compute current row of the shot if it's inside grid:
                 int cr = -999;
                 if (shots[i].from_player) {
                     if (shots[i].delta >= 2) cr = shots[i].delta - 2;
@@ -102,333 +84,212 @@ void print_board(int tick, int nrows, int ncols, const int *alive,
         }
         printf("\n");
     }
-
-    // player row (under the grid)
     for (int c = 0; c < ncols; ++c) {
         printf(c == player_col ? "[^] " : "[ ] ");
     }
     printf("\n\n");
 }
 
-
-// Find bottom-most alive invader row in a column; return -1 if none
-int bottom_alive_row(const int *alive, int nrows, int ncols, int col) {
-    for (int r = 0; r < nrows; ++r) {
-        if (alive[IDX(r,col)] == 1) return r;
-    }
-    return -1 ; // no alive invader in this column
+// ---------- Step 10: fire decision ----------
+int decide_fire(int tick, int eligible, int rank_seed) {
+    if (!eligible) return 0;
+    if (tick % 4 != 0) return 0;
+    unsigned int s = (unsigned int)(tick * 1103515245u + rank_seed * 12345u);
+    double u = (double)(s % 1000) / 1000.0;
+    return u < 0.1 ? 1 : 0;
 }
 
-// Step 14: resolve collisions; may set *player_alive = 0 and deactivate shots
+// ---------- Step 13: bullet advancement ----------
+void advance_shots(Shot *pool, int max) {
+    for (int i = 0; i < max; ++i)
+        if (pool[i].active) pool[i].delta += 1;
+}
+
+int shot_row_now(const Shot *s) {
+    if (!s->active) return INT_MIN;
+    if (s->from_player) {
+        if (s->delta < 2) return INT_MIN;
+        return s->delta - 2;
+    } else {
+        if (s->delta < 2) return INT_MIN;
+        return s->from_row - (s->delta - 1);
+    }
+}
+
+// ---------- Step 14: collisions ----------
+int bottom_alive_row(const int *alive, int nrows, int ncols, int col) {
+    for (int r = 0; r < nrows; ++r)
+        if (alive[IDX(r,col)] == 1) return r;
+    return -1;
+}
+
 void resolve_collisions(Shot *pool, int max, int *alive,
                         int nrows, int ncols, int player_col, int *player_alive) {
     for (int i = 0; i < max; ++i) {
         if (!pool[i].active) continue;
-
         if (pool[i].from_player) {
             int br = bottom_alive_row(alive, nrows, ncols, pool[i].col);
             int cr = shot_row_now(&pool[i]);
             if (br >= 0 && cr == br) {
-                alive[IDX(br, pool[i].col)] = 0;   // kill invader
-                pool[i].active = 0;               // remove bullet
+                alive[IDX(br, pool[i].col)] = 0;
+                pool[i].active = 0;
             }
         } else {
-            // invader bullet: hits player when it reaches row -1 at player's column
-            int cr = pool[i].from_row - (pool[i].delta - 1); // same as shot_row_now but we need -1
-            if (pool[i].col == player_col && cr == -1 ) {
+            int cr = pool[i].from_row - (pool[i].delta - 1);
+            if (pool[i].col == player_col && cr == -1) {
                 *player_alive = 0;
                 pool[i].active = 0;
             }
-            // optionally: deactivate if bullet has gone below player (cr < -1)
             if (cr < -1) pool[i].active = 0;
         }
     }
 }
 
+// ---------- Step 15: cleanup ----------
+void cull_shots(Shot *pool, int max, int nrows) {
+    for (int i = 0; i < max; ++i) {
+        if (!pool[i].active) continue;
+        int cr = shot_row_now(&pool[i]);
+        if (pool[i].from_player) {
+            if (cr > nrows - 1) pool[i].active = 0;
+        } else {
+            if (cr < -1) pool[i].active = 0;
+        }
+    }
+}
 
+int all_invaders_dead(const int *alive, int nrows, int ncols) {
+    for (int r = 0; r < nrows; ++r)
+        for (int c = 0; c < ncols; ++c)
+            if (alive[IDX(r,c)] == 1) return 0;
+    return 1;
+}
 
+// ---------- main ----------
 int main(int argc, char *argv[]) {
-
-    //rank, size, and dimensions (column) 
     int rank, size;
     int nrows, ncols;
 
-    // 1. Initialize MPI
     MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    // 2. Get total processes and my rank
-    MPI_Comm_size(MPI_COMM_WORLD, &size); //fills size with total processes 
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank); //fills rank with process's ID 
-
-    // 3. Parse command line args, also check if user provided two arguements. 
+    // Steps 1–2
     if (argc == 3) {
         nrows = atoi(argv[1]);
         ncols = atoi(argv[2]);
     } else {
-        if (rank == 0) {
+        if (rank == 0)
             printf("Usage: mpirun -np X ./program nrows ncols\n");
-        }
         MPI_Finalize();
         return 0;
     }
 
-    // number of processess 
     int required = 1 + nrows * ncols;
-
-    // total required doesn't match the number of processess. 
-    // error message is printed. 
     if (size != required) {
-        if (rank == 0) {
+        if (rank == 0)
             printf("ERROR: need %d processes (1 player + %d invaders), but got %d\n",
-                required, nrows*ncols, size);
-        }
+                   required, nrows*ncols, size);
         MPI_Finalize();
         return 0;
     }
 
-    if (rank == 0) {
+    if (rank == 0)
         printf("OK: Using %d processes (1 player + %d invaders)\n",
-            size, nrows*ncols);
-    }
+               size, nrows*ncols);
 
-
-    // Debug print
-    if (rank == 0) {
-        printf("Grid requested: %d x %d with %d processes\n", nrows, ncols, size);
-    }
-
-    //Every process after rank 0 is a invader. -----------------------------------------
-    
-    if (rank > 0){
-
-        // we are figuring out, row and column position for each invader. 
-        int invader_rank = rank - 1; 
-        int row = invader_rank / ncols; 
-        int col = invader_rank % ncols; 
-
-
-        // possibly optional (Cartisan topology)
-        // simplifies neighbour lookups. 
-        MPI_Comm cart_comm;
-        int dims[2] = {nrows, ncols};
-        int periods[2] = {0, 0};
-        int reorder = 1;
-        MPI_Cart_create(invaders_world, 2, dims, periods, reorder, &cart_comm);
-
-
-        printf("Rank %d is invader at (row=%d, col=%d)\n", rank, row, col);
-        printf("Rank %d cart coords = (%d,%d)\n", rank, coords[0], coords[1]);
-
-    }
-
-    // Dead or Alive Grid ----------------------------------------------------------------
-
-    int *alive = NULL;
-    // MACRO - wherever we need to write r * ncols + c, we can write IDX(r,c) instead. 
-    #define IDX(r,c) ( (r) * ncols + (c) )
-
-    
-    if (rank == 0) {
-        // allocate nrows * ncols ints (1 = alive, 0 = dead)
-        alive = (int*) malloc( nrows * ncols * sizeof(int) );
-
-        // init all to alive
-        for (int r = 0; r < nrows; ++r) {
-            for (int c = 0; c < ncols; ++c) {
-                alive[ IDX(r,c) ] = 1;   // use IDX(r,c)
-            }
-        }
-
-        // quick sanity print (optional)
-        printf("Master: initial alive count = %d\n", nrows * ncols);
-    }
-
-    int player_col = 0; // start at leftmost 
-    int player_alive = 1;  //alive flag 
-    
-    // track players cannon 
-    if (rank == 0) {
-        //clamp at lowerbound 
-        if (player_col < 0) player_col = 0;
-        // clamp at upperbound. 
-        if (player_col >= ncols) player_col = ncols - 1;
-        printf("Master: player starts at col=%d\n", player_col);
-
-    }
-
-
-    //// Track Bullets ----------------------------------------
-    #define MAX_SHOTS 1024 
-
-    typedef struct {
-        int col; 
-        int from_row; 
-        int delta; 
-
-        unsigned char from_Player; 
-        unsigned char active; 
-    } Shot; 
-
-    Shot shots[MAX_SHOTS];
-    int nshots = 0;   // optional: number of active shots
-
-    if (rank == 0) {
-
-        for (int i = 0; i < MAX_SHOTS; ++i){
-            shots[i].active = free;   // set to "free"
-            shots[i].delta  = 0;
-            shots[i].col    = 0;
-            shots[i].from_row = 0;
-            shots[i].from_player = 0;
-        }
-
-        printf("Master: bullet pool ready (MAX_SHOTS=%d)\n", MAX_SHOTS);
-    }
-
-    // Tiny helpers (declarations for now; you can implement later)
-    int add_player_shot(Shot *pool, int max, int col) {
-        // find a free slot, set: active=1, from_player=1, col=col, from_row = -1, delta=0
-        // return index or -1 if full
-        // TODO: fill this in
-
-        for(int i = 0; i < max; ++i){
-
-            if(pool[i].active == 0){
-                pool[i].active = 1;
-                pool[i].from_player = 1;
-                pool[i].col = col;
-                pool[i].from_row = -1;
-                pool[i].delta = 0;  
-                
-                return i;
-                
-            }
-        }
-
-        return -1;
-    }
-
-    int add_invader_shot(Shot *pool, int max, int col, int shooter_row) {
-        // find a free slot, set: active=1, from_player=0, col=col, from_row=shooter_row, delta=0
-        // return index or -1 if full
-        // TODO: fill this in
-
-          for(int i = 0; i < max; ++i){
-
-            if(pool[i].active == 0){
-                pool[i].active = 1;
-                pool[i].from_player = 0;
-                pool[i].col = col;
-                pool[i].from_row = shooter_row;
-                pool[i].delta = 0;  
-                
-                return i;
-                
-            }
-        }
-
-
-        return -1;
-    }
-
-
-    //// 
-
-    // print the board - if rank 0 
-    if (rank == 0) {
-    print_board(/*tick=*/0, nrows, ncols, alive, player_col, shots, MAX_SHOTS);
-    }
-
-
-    TickMsg tmsg; 
-
-    //
-    if (rank == 0) {
-        tmsg.tick = 0;
-        tmsg.player_col = player_col;
-        tmsg.game_over = 0;
-    }
-
-    MPI_Bcast(&tmsg, 3 , MPI_INT, 0 , MPI_COMM_WORLD);
-
-    /* 
-    // invaders can read it (optional debug)
-    if (rank > 0) {
-        // printf("Rank %d got tick=%d player_col=%d\n", rank, tmsg.tick, tmsg.player_col);
-    }
-    */
-
-    // Invader path: make a local fire/not-fire decision (eligibility stubbed as 1 for now)
-    if (rank > 0) {
-        int eligible = 1; // TODO (Step 11): master will tell us if we’re bottom-most
-        int fired = decide_fire(tmsg.tick, eligible, rank);
-        // Debug:
-        // if (fired) printf("Rank %d fired at tick %d\n", rank, tmsg.tick);
-    }
-
-    InvaderEvent my_ev = {0, -1, -1};
+    // Step 3: mapping (debug only)
     if (rank > 0) {
         int invader_rank = rank - 1;
-        my_ev.row = invader_rank / ncols;
-        my_ev.col = invader_rank % ncols;
-        my_ev.fired = fired;
+        int row = invader_rank / ncols;
+        int col = invader_rank % ncols;
+        printf("Rank %d is invader at (row=%d, col=%d)\n", rank, row, col);
     }
 
-    InvaderEvent *all = NULL;
+    // Step 5: alive grid
+    int *alive = NULL;
     if (rank == 0) {
-        all = (InvaderEvent*) malloc(sizeof(InvaderEvent) * size);
+        alive = (int*) malloc(nrows * ncols * sizeof(int));
+        for (int r = 0; r < nrows; ++r)
+            for (int c = 0; c < ncols; ++c)
+                alive[IDX(r,c)] = 1;
     }
 
-    MPI_Gather(&my_ev, 3, MPI_INT, all, 3, MPI_INT, 0, MPI_COMM_WORLD);
+    // Step 6: player state
+    int player_col = 0;
+    int player_alive = 1;
 
-    // Master debug output
-    if (rank == 0) {
-        for (int r = 1; r < size; ++r) {
-            if (all[r].fired) {
-                printf("Tick %d: Invader rank %d fired (row=%d, col=%d)\n",
-                    tmsg.tick, r, all[r].row, all[r].col);
+    // Step 7: bullet pool
+    Shot shots[MAX_SHOTS];
+    if (rank == 0)
+        for (int i = 0; i < MAX_SHOTS; ++i) shots[i].active = 0;
+
+    // ----------- Step 16: main tick loop -----------
+    TickMsg tmsg;
+    int game_over = 0;
+    int tick = 0;
+
+    while (!game_over) {
+        // broadcast tick packet
+        if (rank == 0) {
+            tmsg.tick = tick;
+            tmsg.player_col = player_col;
+            tmsg.game_over = 0;
+        }
+        MPI_Bcast(&tmsg, 3, MPI_INT, 0, MPI_COMM_WORLD);
+
+        // invaders decide + gather
+        int fired = 0;
+        if (rank > 0) {
+            int eligible = 1; // simplified
+            fired = decide_fire(tmsg.tick, eligible, rank);
+        }
+
+        InvaderEvent my_ev = {0, -1, -1};
+        if (rank > 0) {
+            int invader_rank = rank - 1;
+            my_ev.row = invader_rank / ncols;
+            my_ev.col = invader_rank % ncols;
+            my_ev.fired = fired;
+        }
+
+        InvaderEvent *all = NULL;
+        if (rank == 0) all = (InvaderEvent*) malloc(sizeof(InvaderEvent) * size);
+        MPI_Gather(&my_ev, 3, MPI_INT, all, 3, MPI_INT, 0, MPI_COMM_WORLD);
+
+        // master updates world
+        if (rank == 0) {
+            // spawn bullets
+            add_player_shot(shots, MAX_SHOTS, player_col);
+            for (int r = 1; r < size; ++r)
+                if (all[r].fired)
+                    add_invader_shot(shots, MAX_SHOTS, all[r].col, all[r].row);
+            free(all);
+
+            // move & resolve
+            advance_shots(shots, MAX_SHOTS);
+            resolve_collisions(shots, MAX_SHOTS, alive, nrows, ncols, player_col, &player_alive);
+            cull_shots(shots, MAX_SHOTS, nrows);
+
+            int win = all_invaders_dead(alive, nrows, ncols);
+
+            print_board(tmsg.tick, nrows, ncols, alive, player_col, shots, MAX_SHOTS);
+
+            if (player_alive == 0) {
+                printf(">>> Player was hit. Game over (tick=%d)\n", tick);
+                game_over = 1;
+            } else if (win) {
+                printf(">>> All invaders eliminated. You win! (tick=%d)\n", tick);
+                game_over = 1;
             }
         }
+
+        MPI_Bcast(&game_over, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        tick++;
+        if (tick > 20) game_over = 1; // safety cap for testing
     }
 
-    if(rank == 0) {
-        int pi = add_player_shot(shots, MAX_SHOTS, player_col)
-
-        for (int r = 1; r < size; ++i ) {
-
-            if(!all[r].fired) continue; 
-
-            int col = all[r].col; 
-            int shooter_row = all[r].row; 
-            int ii = add_invader_shot(shots, MAX_SHOTS, col, shooter_row); 
-
-        }
-
-    }
-
-    free(all); 
-    
-    if (rank == 0) {
-        advance_shots(shots, MAX_SHOTS);
-        print_board(tmsg.tick, nrows, ncols, alive, player_col, shots, MAX_SHOTS);
-    }
-
-    if (rank == 0) {
-        advance_shots(shots, MAX_SHOTS);
-        resolve_collisions(shots, MAX_SHOTS, alive, nrows, ncols, player_col, &player_alive);
-        cull_shots(shots, MAX_SHOTS, nrows);
-
-        int win = all_invaders_dead(alive, nrows, ncols);
-        // (we’ll wire game_over handling in a later step)
-        print_board(tmsg.tick, nrows, ncols, alive, player_col, shots, MAX_SHOTS);
-    }
-
-
-
-    if (rank == 0) {
-        free(alive);
-    }
-
+    if (rank == 0 && alive) free(alive);
     MPI_Finalize();
     return 0;
 }
