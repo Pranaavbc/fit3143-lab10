@@ -88,6 +88,41 @@ void print_board(int tick, int nrows, int ncols, const int *alive,
 }
 
 
+// Find bottom-most alive invader row in a column; return -1 if none
+int bottom_alive_row(const int *alive, int nrows, int ncols, int col) {
+    for (int r = 0; r < nrows; ++r) {
+        if (alive[IDX(r,col)] == 1) return r;
+    }
+    return -1 ; // no alive invader in this column
+}
+
+// Step 14: resolve collisions; may set *player_alive = 0 and deactivate shots
+void resolve_collisions(Shot *pool, int max, int *alive,
+                        int nrows, int ncols, int player_col, int *player_alive) {
+    for (int i = 0; i < max; ++i) {
+        if (!pool[i].active) continue;
+
+        if (pool[i].from_player) {
+            int br = bottom_alive_row(alive, nrows, ncols, pool[i].col);
+            int cr = shot_row_now(&pool[i]);
+            if (br >= 0 && cr == br) {
+                alive[IDX(br, pool[i].col)] = 0;   // kill invader
+                pool[i].active = 0;               // remove bullet
+            }
+        } else {
+            // invader bullet: hits player when it reaches row -1 at player's column
+            int cr = pool[i].from_row - (pool[i].delta - 1); // same as shot_row_now but we need -1
+            if (pool[i].col == player_col && cr == -1 ) {
+                *player_alive = 0;
+                pool[i].active = 0;
+            }
+            // optionally: deactivate if bullet has gone below player (cr < -1)
+            if (cr < -1) pool[i].active = 0;
+        }
+    }
+}
+
+
 
 int main(int argc, char *argv[]) {
 
